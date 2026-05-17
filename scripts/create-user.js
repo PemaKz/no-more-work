@@ -14,11 +14,9 @@ function parseArgs(argv) {
 async function main() {
   const cli = parseArgs(process.argv);
 
-  // Avoid port collision with a running dev server
   if (!process.env.SCRIPT_PORT_OVERRIDE) {
     process.env.PORT = String(3000 + Math.floor(Math.random() * 1000) + 1000);
   }
-  // Skip booting heavy services we don't need for this script
   process.env.DISABLE_EVENTS = process.env.DISABLE_EVENTS || 'true';
   process.env.DISABLE_BULLMQ = process.env.DISABLE_BULLMQ || 'true';
   process.env.DISABLE_SCHEDULER = process.env.DISABLE_SCHEDULER || 'true';
@@ -75,14 +73,19 @@ async function main() {
   const auth = authService.client;
 
   try {
-    const user = await auth.api.signUpEmail({
+    const signupResult = await auth.api.signUpEmail({
       body: { email, password, name },
     });
+
+    const userId = signupResult?.user?.id;
+    if (!userId) {
+      throw new Error('No se pudo obtener el ID del usuario tras signUp.');
+    }
 
     if (role && role !== 'user') {
       try {
         await auth.api.setRole({
-          body: { userId: user?.user?.id || user?.id, role },
+          body: { userId, role },
         });
       } catch (e) {
         console.warn(`Usuario creado pero no se pudo asignar role "${role}":`, e.message);
@@ -90,7 +93,10 @@ async function main() {
     }
 
     console.log('\n✅ Usuario creado:');
-    console.log(JSON.stringify(user, null, 2));
+    console.log(JSON.stringify(signupResult, null, 2));
+    console.log(
+      '\nℹ️  Se añadirá automáticamente a la organización "No More Work" en su primer login.'
+    );
     process.exit(0);
   } catch (err) {
     console.error('\n❌ Error creando usuario:', err.message || err);

@@ -14,6 +14,9 @@
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@pixi/react": "^8.0.5",
+    "pixi.js": "^8.18.1",
+    "socket.io-client": "^4.8.3",
     "zyket": "^1.2.3"
   }
 }

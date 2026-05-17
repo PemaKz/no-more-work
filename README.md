@@ -80,6 +80,18 @@ npm run create-user -- --email=admin@example.com --name="Admin" --password=12345
 
 > El script ([scripts/create-user.js](scripts/create-user.js)) boota el `Kernel` con el mismo `AuthService` que la app y llama a `auth.api.signUpEmail` de better-auth. Usa un PORT aleatorio internamente para no chocar con un `npm run dev` en marcha.
 
+### Organización por defecto
+
+La organización **"No More Work"** (slug `no-more-work`) se gestiona automáticamente: la pertenencia se verifica **en cada login** (hook `after` sobre `/sign-in/email` definido en [src/services/auth/index.js](src/services/auth/index.js)).
+
+- En el **primer login** del primer usuario, se crea la organización y el usuario queda como `owner`.
+- En los siguientes logins, si el usuario no es miembro todavía, se añade como `member`.
+- Si ya es miembro, no se hace nada (idempotente).
+
+El script `create-user` **solo crea el usuario** — la asignación a la organización ocurre cuando entra por primera vez.
+
+Desde el panel los usuarios pueden además **crear organizaciones adicionales** y **cambiar entre ellas** desde el selector que vive en el sidebar (`OrgSwitcher`). La organización activa se persiste en la sesión de better-auth.
+
 ---
 
 ## Variables de entorno (`.env`)
