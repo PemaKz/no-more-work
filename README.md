@@ -80,17 +80,104 @@ npm run create-user -- --email=admin@example.com --name="Admin" --password=12345
 
 > El script ([scripts/create-user.js](scripts/create-user.js)) boota el `Kernel` con el mismo `AuthService` que la app y llama a `auth.api.signUpEmail` de better-auth. Usa un PORT aleatorio internamente para no chocar con un `npm run dev` en marcha.
 
-### Organización por defecto
+### Organizaciones
 
-La organización **"No More Work"** (slug `no-more-work`) se gestiona automáticamente: la pertenencia se verifica **en cada login** (hook `after` sobre `/sign-in/email` definido en [src/services/auth/index.js](src/services/auth/index.js)).
+El script `create-user` **solo crea el usuario** — no le asigna ninguna organización. Tras el primer login, el usuario debe crear su organización desde el panel: el selector `OrgSwitcher` (en el topbar) tiene un botón "Crear organización" que llama a `auth.organization.create` de better-auth. La organización activa se persiste en la sesión.
 
-- En el **primer login** del primer usuario, se crea la organización y el usuario queda como `owner`.
-- En los siguientes logins, si el usuario no es miembro todavía, se añade como `member`.
-- Si ya es miembro, no se hace nada (idempotente).
+---
 
-El script `create-user` **solo crea el usuario** — la asignación a la organización ocurre cuando entra por primera vez.
+## Engine (LLM runtime)
 
-Desde el panel los usuarios pueden además **crear organizaciones adicionales** y **cambiar entre ellas** desde el selector que vive en el sidebar (`OrgSwitcher`). La organización activa se persiste en la sesión de better-auth.
+El sistema usa el **Vercel AI SDK** (`ai` + adapters) para hablar con LLMs y **BullMQ** sobre Redis para correr workers en background.
+
+### Conceptos
+
+- **Provider** — endpoint LLM configurable por organización (Anthropic, OpenAI, OpenAI-compatible). Vive en [Config → Providers](frontend/src/views/panel/settings). La API key se introduce en el dialog del Provider y se guarda como `OrgSecret` interno (cifrado at-rest con AES-256-GCM, jamás vuelve a salir del servidor).
+- **Agent** — sujeto que ejecuta. Tiene `providerId`, `systemPrompt`, `loopEnabled`, `loopIntervalSec` y `role` (libre, p.ej. `planner` / `critic` / `executor` para orquestadores).
+- **Task** — unidad de trabajo en una zona. Tipos: `custom` / `objective` / `incident` / `deliberation`. Las tasks se ejecutan vía LLM con tools (`add_context_entry`, `complete_task`).
+- **ContextEntry** — log auditable append-only. Los agentes lo retroalimentan durante su ejecución; el usuario puede **pin** (mantener) o **delete** (cancelar retroalimentación) cada entrada.
+- **Deliberación** — task especial de la zona orquestadora. Round-robin secuencial entre todos los agentes orquestadores ordenados por rol (planner → critic → executor → facilitator → resto). Cada uno puede `propose_task` (delega a otra zona), `add_context_entry` o `pass_turn`. El resultado se persiste en `task.output` para auditoría.
+- **Tick** — el scheduler enqueue periódicamente jobs en la cola `agent-tick` por cada agente con `loopEnabled=true`. El worker invoca al LLM con tools (`add_context_entry`, `create_task`, `end_tick`) — diseñado para ser barato (de ahí la preferencia por self-hosted).
+
+### Colas de trabajo
+
+Requiere Redis. Configurar en `.env`:
+
+```ini
+CACHE_URL=redis://localhost:6379
+QUEUES=agent-tick,task-process
+DISABLE_BULLMQ=false
+```
+
+Las colas se inicializan en el boot del Kernel. Los workers viven en `src/workers/`:
+- `agentTick.js` → cola `agent-tick`, ejecuta [`runAgentTick`](src/engine/runAgentTick.js).
+- `taskProcess.js` → cola `task-process`, ejecuta [`runTask`](src/engine/runTask.js) (que enruta a `runDeliberation` si `type=deliberation`).
+
+El scheduler ([`src/engine/scheduler.js`](src/engine/scheduler.js)) usa `Queue.upsertJobScheduler` para programar ticks repetibles y se re-sincroniza con la BD al boot.
+
+### Usar Claude
+
+1. **Crear secret** (opcional, también puedes pegar la key directamente en el Provider dialog): Config → Recursos → Secrets → `+ Añadir secret` con `ANTHROPIC_API_KEY`.
+2. **Crear provider**: Config → Providers → `+ Provider`:
+   - Tipo: `Anthropic`
+   - Modelo: `claude-sonnet-4-5` (o el que prefieras)
+   - API key: pega tu key (se cifra internamente)
+3. **Asignar al agente**: editar agente → sección Motor → seleccionar el provider.
+4. **Disparar manualmente**: en la zona, sección Tasks → escribir título → ▶ → ver progreso en vivo (status + ContextEntries vía socket).
+
+### Usar self-hosted (Ollama)
+
+[Ollama](https://ollama.com) corre modelos open-weight en local con una API HTTP. Ideal para los **loops** (que generarían muchos tokens si fuesen al cloud).
+
+#### Setup local
+
+```bash
+# macOS
+brew install ollama
+ollama serve            # arranca el daemon en localhost:11434
+ollama pull llama3.1:8b # descarga el modelo (~4.7GB)
+
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull llama3.1:8b
+
+# Otros modelos populares
+ollama pull qwen2.5:7b
+ollama pull mistral:7b
+ollama pull gemma2:9b
+```
+
+Verificar que funciona:
+```bash
+curl http://localhost:11434/v1/models
+```
+
+#### Configurar el Provider
+
+En Config → Providers → `+ Provider`:
+- **Tipo**: `OpenAI-compatible` (Ollama expone una API compatible OpenAI en `/v1`)
+- **Base URL**: `http://localhost:11434/v1`
+- **Modelo por defecto**: `llama3.1:8b` (o el que hayas descargado — debe coincidir EXACTO con el tag de `ollama list`)
+- **API key**: déjala vacía (Ollama no la pide)
+
+#### Estrategia mixta
+
+Típica: usa Claude para tasks complejas (deliberaciones, decisiones críticas) y Ollama para los loops constantes. Cada agente apunta al provider que necesita.
+
+Ejemplo:
+- Orquestador (`planner` / `critic`) → provider `claude-prod`, sin loop
+- Agentes de zona con `loopEnabled=true` → provider `ollama-local`, interval 120s
+
+### Orquestación (deliberación)
+
+En la zona orquestadora, crea una task de tipo **Deliberación** con un título tipo "¿Próximos objetivos para esta semana?". Al pulsar ▶:
+1. Se cargan todos los agentes orquestadores con provider
+2. Se ordenan por rol semántico
+3. Cada uno habla por turno con acceso a las contribuciones previas
+4. Pueden delegar trabajo a otras zonas vía `propose_task` (con `parentTaskId` apuntando a la deliberación)
+5. La deliberación cierra con un output JSON con todas las contribuciones y tasks creadas
+
+Tener varios agentes con roles distintos enriquece el consenso. Con uno solo, simplemente delibera consigo mismo.
 
 ---
 

@@ -10,15 +10,9 @@ export default function useAuth() {
   const { user, session } = sessionContext?.data || {};
 
   const activeOrganization = activeOrgContext?.data || null;
+  const activeOrganizationPending = activeOrgContext?.isPending || false;
   const organizations = organizationsContext?.data || [];
   const organizationsPending = organizationsContext?.isPending || false;
-
-  // El plugin `organization` no invalida su atom $listOrg al iniciar sesión
-  // (solo al crear/borrar/actualizar orgs). Si no forzamos un refetch tras el
-  // login, la lista queda vacía hasta que el usuario interactúe. Exponemos
-  // las funciones de refetch para que el AuthView las llame post-login.
-  const refetchOrganizations = organizationsContext?.refetch;
-  const refetchActiveOrganization = activeOrgContext?.refetch;
 
   const login = async (email, password) => {
     const { data, error } = await context.client.signIn.email({ email, password });
@@ -66,11 +60,10 @@ export default function useAuth() {
     user,
     session,
     activeOrganization,
+    activeOrganizationPending,
     organizations,
     organizationsPending,
     createOrganization,
     setActiveOrganization,
-    refetchOrganizations,
-    refetchActiveOrganization,
   };
 }

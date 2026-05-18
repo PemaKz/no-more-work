@@ -7,7 +7,7 @@ export default function AuthView() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const { login, refetchOrganizations } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -17,12 +17,6 @@ export default function AuthView() {
 
     try {
       await login(email, password);
-      // El hook server-side de /sign-in/email asegura que el usuario está en
-      // la org "No More Work", pero el plugin organization no refresca su
-      // lista al iniciar sesión. Forzamos un refetch de /organization/list;
-      // el atomListener de $activeOrgSignal se dispara automáticamente con
-      // ese path, así que el active-org se refresca solo (sin pedirlo aparte).
-      await refetchOrganizations?.();
       navigate("/panel/dashboard");
     } catch (err) {
       setError(err.message || "No se pudo iniciar sesión");

@@ -2,6 +2,7 @@ const { Route } = require('zyket');
 const AuthMiddleware = require('../../middlewares/auth');
 const { notify } = require('../../utils/notifications');
 const { emitToOrg } = require('../../utils/realtime');
+const { upsertAgentSchedule } = require('../../engine/scheduler');
 
 /**
  * Coloca el nuevo agente en un grid simple dentro de la zona, evitando
@@ -63,6 +64,36 @@ module.exports = class AgentsRoute extends Route {
     const description =
       typeof body.description === 'string' ? body.description || null : null;
 
+    // ── Engine fields (opcionales) ───────────────────────────────────────
+    const { Provider } = db.models;
+    let providerId = null;
+    if (body.providerId) {
+      const provider = await Provider.findOne({
+        where: { id: body.providerId, organizationId: orgId },
+      });
+      if (!provider) {
+        return {
+          status: 400,
+          success: false,
+          message: 'providerId not found',
+        };
+      }
+      providerId = provider.id;
+    }
+    const systemPrompt =
+      typeof body.systemPrompt === 'string'
+        ? body.systemPrompt || null
+        : null;
+    const loopEnabled = body.loopEnabled === true;
+    let loopIntervalSec = 300;
+    if (Number.isFinite(body.loopIntervalSec)) {
+      loopIntervalSec = Math.max(30, Math.round(body.loopIntervalSec));
+    }
+    const role =
+      typeof body.role === 'string' && body.role.trim()
+        ? body.role.trim()
+        : null;
+
     let x = Number.isFinite(body.x) ? Math.round(body.x) : null;
     let y = Number.isFinite(body.y) ? Math.round(body.y) : null;
     if (x == null || y == null) {
@@ -82,6 +113,11 @@ module.exports = class AgentsRoute extends Route {
       description,
       x,
       y,
+      providerId,
+      systemPrompt,
+      loopEnabled,
+      loopIntervalSec,
+      role,
     });
 
     await notify(container, {
@@ -94,6 +130,13 @@ module.exports = class AgentsRoute extends Route {
 
     const payload = agent.toJSON();
     emitToOrg(container, orgId, 'agent:created', payload);
+
+    // Si el agente arranca con loop activado, programar el scheduler. Es
+    // creación, así que pasamos immediate=true para que el primer tick
+    // dispare ya y el usuario vea actividad sin esperar loopIntervalSec.
+    if (agent.loopEnabled) {
+      await upsertAgentSchedule(container, agent, { immediate: true });
+    }
 
     return { status: 201, agent: payload };
   }

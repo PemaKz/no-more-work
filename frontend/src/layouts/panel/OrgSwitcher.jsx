@@ -43,6 +43,7 @@ function slugify(value) {
 export default function OrgSwitcher() {
   const {
     activeOrganization,
+    activeOrganizationPending,
     organizations,
     organizationsPending,
     createOrganization,
@@ -69,13 +70,23 @@ export default function OrgSwitcher() {
 
   useEffect(() => {
     if (autoSetAttemptedRef.current) return;
+    // CRÍTICO: hay que esperar a que ambos contextos terminen de cargar. Si
+    // no, en un refresh el active-org viene `null` transitorio mientras
+    // better-auth lo carga; auto-elegimos organizations[0] (la más antigua)
+    // y pisamos la elección persistida del usuario.
+    if (activeOrganizationPending || organizationsPending) return;
     if (activeOrganization) return;
     if (organizations.length === 0) return;
     autoSetAttemptedRef.current = true;
     setActiveRef.current(organizations[0].id).catch(() => {
       autoSetAttemptedRef.current = false; // permitir reintento si falla
     });
-  }, [activeOrganization, organizations]);
+  }, [
+    activeOrganization,
+    activeOrganizationPending,
+    organizations,
+    organizationsPending,
+  ]);
 
   // Cerrar al click fuera o Esc
   useEffect(() => {

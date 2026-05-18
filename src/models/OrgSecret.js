@@ -13,6 +13,14 @@ module.exports = ({ sequelize, Sequelize }) => {
       // Cifrado con AES-256-GCM. Formato: iv:tag:ciphertext en base64.
       valueEncrypted: { type: Sequelize.TEXT, allowNull: true },
       description: { type: Sequelize.TEXT, allowNull: true },
+      // true = gestionado internamente (p.ej. desde un Provider). Estos
+      // no aparecen en el listado de Secrets del Config; viven detrás de
+      // la entidad que los posee.
+      internal: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
     },
     {
       tableName: 'org_secrets',

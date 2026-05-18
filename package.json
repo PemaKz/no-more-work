@@ -12,11 +12,16 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.78",
+    "@ai-sdk/openai": "^3.0.64",
+    "@ai-sdk/openai-compatible": "^2.0.47",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@pixi/react": "^8.0.5",
+    "ai": "^6.0.184",
     "pixi.js": "^8.18.1",
     "socket.io-client": "^4.8.3",
+    "zod": "^4.4.3",
     "zyket": "^1.2.3"
   }
 }

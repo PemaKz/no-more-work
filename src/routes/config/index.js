@@ -49,7 +49,12 @@ async function loadConfig(models, orgId) {
     }),
     OrgMcp.findAll({ ...where, order: [['createdAt', 'ASC']] }),
     OrgSkill.findAll({ ...where, order: [['createdAt', 'ASC']] }),
-    OrgSecret.findAll({ ...where, order: [['createdAt', 'ASC']] }),
+    // Solo secrets gestionados por el usuario — los `internal` (creados
+    // por providers, etc.) viven detrás de su entidad dueña.
+    OrgSecret.findAll({
+      where: { organizationId: orgId, internal: false },
+      order: [['createdAt', 'ASC']],
+    }),
   ]);
   return {
     contexts: serializeRows(contexts),
@@ -160,9 +165,11 @@ module.exports = class ConfigRoute extends Route {
       }
       if (secrets !== null) {
         // Diff por key (mismo patrón que zones): preserva valores cifrados
-        // existentes cuando el cliente no envía `value`.
+        // existentes cuando el cliente no envía `value`. Solo opera sobre
+        // los user-managed — los internal (gestionados por providers, etc.)
+        // no se tocan desde aquí.
         const existing = await OrgSecret.findAll({
-          where: { organizationId: orgId },
+          where: { organizationId: orgId, internal: false },
           transaction: tx,
         });
         const submittedKeys = new Set(secrets.map((s) => s.key));

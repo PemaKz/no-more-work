@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useConfig from "../../../hooks/useConfig";
 import useAuth from "../../../hooks/useAuth";
+import useProviders from "../../../hooks/useProviders";
 import timeAgo from "../../../utils/timeAgo";
+import ProviderDialog from "./ProviderDialog";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Iconos
@@ -671,8 +673,110 @@ function OrganizationTab() {
 
 const TABS = [
   { id: "resources", label: "Recursos" },
+  { id: "providers", label: "Providers" },
   { id: "organization", label: "Organización" },
 ];
+
+const KIND_LABEL = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  openai_compatible: "OpenAI-compat",
+};
+
+function ProvidersTab() {
+  const { providers, isLoading, error, createProvider, updateProvider, deleteProvider } =
+    useProviders();
+  const [dialog, setDialog] = useState({ mode: "closed" });
+
+  const editing = useMemo(() => {
+    if (dialog.mode !== "edit") return null;
+    return providers.find((p) => p.id === dialog.providerId) || null;
+  }, [dialog, providers]);
+
+  const handleSubmit = async (payload) => {
+    if (dialog.mode === "edit" && dialog.providerId) {
+      await updateProvider(dialog.providerId, payload);
+    } else {
+      await createProvider(payload);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (dialog.mode !== "edit" || !dialog.providerId) return;
+    await deleteProvider(dialog.providerId);
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold">Providers LLM</h3>
+          <p className="text-xs text-[color:var(--color-text-muted)] mt-0.5">
+            Endpoints (Anthropic, OpenAI o OpenAI-compatible como Ollama) que
+            los agentes usan para ejecutar tasks y loops. La API key se
+            cifra at-rest y nunca vuelve a salir del servidor.
+          </p>
+        </div>
+        <button
+          onClick={() => setDialog({ mode: "create" })}
+          className="btn btn-primary btn-sm"
+        >
+          + Provider
+        </button>
+      </div>
+
+      {error && (
+        <div className="px-4 py-3 rounded-[var(--radius)] border bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.35)] text-sm text-[color:var(--color-status-error)]">
+          No se pudieron cargar los providers: {error.message || "error"}
+        </div>
+      )}
+
+      {providers.length === 0 && !isLoading ? (
+        <div className="panel !p-6 text-center">
+          <p className="text-sm text-[color:var(--color-text-muted)]">
+            Sin providers configurados.
+          </p>
+          <p className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)] mt-1">
+            sin engine — los agentes no podrán ejecutar tasks
+          </p>
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {providers.map((p) => (
+            <li
+              key={p.id}
+              className="panel !p-3 flex items-center gap-3 cursor-pointer hover:border-[color:var(--color-border-strong)] transition-colors"
+              onClick={() => setDialog({ mode: "edit", providerId: p.id })}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <span className="text-sm font-semibold">{p.name}</span>
+                  <span className="badge">{KIND_LABEL[p.kind] || p.kind}</span>
+                </div>
+                <div className="mono text-[11px] text-[color:var(--color-text-muted)] mt-0.5 truncate">
+                  {p.defaultModel}
+                  {p.baseURL ? ` · ${p.baseURL}` : ""}
+                </div>
+                <div className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)] mt-0.5">
+                  {p.hasApiKey ? "api key · configurada" : "sin api key"}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <ProviderDialog
+        open={dialog.mode !== "closed"}
+        mode={dialog.mode === "edit" ? "edit" : "create"}
+        provider={editing}
+        onClose={() => setDialog({ mode: "closed" })}
+        onSubmit={handleSubmit}
+        onDelete={handleDelete}
+      />
+    </div>
+  );
+}
 
 export default function PanelSettingsView() {
   const [tab, setTab] = useState("resources");
@@ -728,6 +832,7 @@ export default function PanelSettingsView() {
             isLoading={isLoading}
           />
         )}
+        {tab === "providers" && <ProvidersTab />}
         {tab === "organization" && <OrganizationTab />}
       </div>
     </div>

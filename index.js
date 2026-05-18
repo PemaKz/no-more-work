@@ -1,9 +1,13 @@
-const { Kernel } = require('zyket');
+const { Kernel, BullBoardExtension } = require('zyket');
 
 const kernel = new Kernel({
 	services: [
 		['auth', require('./src/services/auth'), ["@service_container"]],
-	]
+	],
+    extensions: [
+        new BullBoardExtension({
+        }),
+    ],
 });
 
 kernel.boot().then(async () => {
@@ -59,6 +63,18 @@ kernel.boot().then(async () => {
         }
     } catch (error) {
         console.error('Error syncing database:', error);
+    }
+
+    // Inicializa el scheduler de loops de agentes (BullMQ Job Schedulers).
+    // Re-sincroniza desde BD para sobrevivir reinicios.
+    try {
+        const { initScheduler } = require('./src/engine/scheduler');
+        await initScheduler(kernel.container);
+    } catch (error) {
+        kernel.container.get('logger')?.error?.(
+            'Error initializing agent scheduler:',
+            error.message
+        );
     }
 }).catch((error) => {
     console.error('Error booting kernel:', error);

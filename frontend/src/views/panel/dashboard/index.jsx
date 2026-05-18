@@ -302,6 +302,21 @@ function Zone({
         alpha={labelAlpha}
         style={labelStyle}
       />
+      {zone.kind === "controller" && (
+        <pixiText
+          text="ORQUESTADOR · CONSENSO Y REPARTO DE TAREAS"
+          x={12}
+          y={28}
+          alpha={0.55}
+          style={{
+            fontFamily: '"JetBrains Mono Variable", monospace',
+            fontSize: 9,
+            fontWeight: "500",
+            fill: color,
+            letterSpacing: 1,
+          }}
+        />
+      )}
       {agents?.map((a) => (
         <Agent
           key={a.id}
@@ -313,6 +328,10 @@ function Zone({
           initialX={a.x}
           initialY={a.y}
           status={a.status}
+          currentActivity={a.currentActivity}
+          loopEnabled={a.loopEnabled}
+          loopIntervalSec={a.loopIntervalSec}
+          lastTickAt={a.lastTickAt}
           wanderRadius={30}
           accent={accent}
           ringColor={ringColor}
@@ -343,6 +362,10 @@ function Agent({
   initialX,
   initialY,
   status,
+  currentActivity,
+  loopEnabled,
+  loopIntervalSec,
+  lastTickAt,
   wanderRadius,
   accent,
   ringColor,
@@ -353,6 +376,35 @@ function Agent({
 }) {
   const isWorking = status === "working";
   const fillColor = isWorking ? accent : STATUS_COLOR[status] ?? STATUS_COLOR.idle;
+
+  // Tick local cada 1s SOLO si tiene sentido mostrar cuenta atrás (loop
+  // activo y no está trabajando). Evita timers innecesarios en el resto.
+  const [now, setNow] = useState(() => Date.now());
+  const needsCountdown = loopEnabled && !currentActivity;
+  useEffect(() => {
+    if (!needsCountdown) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [needsCountdown]);
+
+  const activityLine = useMemo(() => {
+    if (currentActivity) {
+      return currentActivity.length > 28
+        ? currentActivity.slice(0, 25) + "…"
+        : currentActivity;
+    }
+    if (!loopEnabled) return null;
+    if (!lastTickAt) return "tick pendiente";
+    const intervalMs = (loopIntervalSec || 300) * 1000;
+    const remaining = Math.max(
+      0,
+      new Date(lastTickAt).getTime() + intervalMs - now
+    );
+    if (remaining < 1000) return "tick inminente…";
+    const s = Math.floor(remaining / 1000);
+    if (s >= 60) return `tick en ${Math.floor(s / 60)}m ${s % 60}s`;
+    return `tick en ${s}s`;
+  }, [currentActivity, loopEnabled, loopIntervalSec, lastTickAt, now]);
 
   const containerRef = useRef(null);
   const haloRef = useRef(null);
@@ -481,6 +533,20 @@ function Agent({
     [textColor, textDimColor]
   );
 
+  // Estilo de la línea de actividad: si está trabajando, usar accent y
+  // peso medio (lo importante AHORA); si es countdown, mantenerlo discreto.
+  const activityStyle = useMemo(
+    () => ({
+      fontFamily: '"JetBrains Mono Variable", monospace',
+      fontSize: 9,
+      fontWeight: currentActivity ? "600" : "400",
+      fill: currentActivity ? accent : textDimColor ?? 0x64748b,
+      letterSpacing: 0.4,
+      align: "center",
+    }),
+    [accent, textDimColor, currentActivity]
+  );
+
   return (
     <pixiContainer
       ref={containerRef}
@@ -502,6 +568,16 @@ function Agent({
           anchor={0.5}
           alpha={0.55}
           style={labelStyle}
+        />
+      )}
+      {activityLine && (
+        <pixiText
+          text={activityLine}
+          x={0}
+          y={34}
+          anchor={0.5}
+          alpha={currentActivity ? 0.95 : 0.7}
+          style={activityStyle}
         />
       )}
     </pixiContainer>
@@ -1057,9 +1133,10 @@ export default function PanelDashboardView() {
   }, [agentDialog, zones]);
 
   const openAgentCreate = useCallback(() => {
-    // Defaultea a la zona controladora si existe, sino la primera.
-    const controller = zones.find((z) => z.kind === "controller");
-    const defaultZoneId = controller?.id || zones[0]?.id || null;
+    // Default a la primera zona estándar (NO al orquestador). El orquestador
+    // tiene su propio flujo: añadir agentes desde su ZoneDialog.
+    const standardZones = zones.filter((z) => z.kind !== "controller");
+    const defaultZoneId = standardZones[0]?.id || null;
     setAgentDialog({ mode: "create", zoneId: defaultZoneId });
   }, [zones]);
   const openAgentEdit = useCallback(

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import timeAgo from "../../../utils/timeAgo";
+import useTasks from "../../../hooks/useTasks";
+import useContextEntries from "../../../hooks/useContextEntries";
 
 const ZONE_TYPES = [
   { id: "research", label: "Research", color: "#8b5cf6" },
@@ -84,6 +86,34 @@ const PencilIcon = (p) => (
   </svg>
 );
 
+const PlayIcon = (p) => (
+  <svg viewBox="0 0 24 24" width="12" height="12" {...stroke} fill="currentColor" {...p}>
+    <polygon points="5 3 19 12 5 21 5 3" />
+  </svg>
+);
+
+const PinIcon = (p) => (
+  <svg viewBox="0 0 24 24" width="14" height="14" {...stroke} {...p}>
+    <path d="M12 17v5" />
+    <path d="M9 10.76a2 2 0 0 1-1.11 1.79L7 13l-2 4h14l-2-4-.89-.45a2 2 0 0 1-1.11-1.79V5h.5a.5.5 0 0 0 0-1h-7a.5.5 0 0 0 0 1H10z" />
+  </svg>
+);
+
+const TASK_STATUS_DOT = {
+  pending: "idle",
+  running: "working",
+  done: "success",
+  cancelled: "idle",
+  error: "error",
+};
+
+const ENTRY_KIND_LABEL = {
+  insight: "Insight",
+  decision: "Decisión",
+  observation: "Observación",
+  memo: "Memo",
+};
+
 function Section({ title, subtitle, count, children, onAdd, addLabel = "Añadir" }) {
   return (
     <section className="space-y-3">
@@ -123,6 +153,306 @@ function ItemCard({ children, onRemove }) {
       </button>
       {children}
     </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Operaciones: Tasks + Context entries (engine runtime data)
+// ────────────────────────────────────────────────────────────────────────
+
+function TasksPanel({ zone }) {
+  const { tasks, createTask, deleteTask, runTask } = useTasks({
+    zoneId: zone.id,
+  });
+  const isController = zone.kind === "controller";
+  const [newTitle, setNewTitle] = useState("");
+  // Default según contexto: deliberación en el orquestador, custom en el resto
+  const [newType, setNewType] = useState(
+    isController ? "deliberation" : "custom"
+  );
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState("");
+
+  // No usamos <form> aquí porque este panel se renderiza dentro del form
+  // principal del ZoneDialog y los forms anidados son HTML inválido.
+  const handleCreate = async () => {
+    const title = newTitle.trim();
+    if (!title) return;
+    setCreating(true);
+    setError("");
+    try {
+      await createTask({ zoneId: zone.id, title, type: newType });
+      setNewTitle("");
+      setNewType(isController ? "deliberation" : "custom");
+    } catch (err) {
+      setError(err.message || "No se pudo crear la task");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleRun = async (id) => {
+    try {
+      await runTask(id);
+    } catch (err) {
+      setError(err.message || "No se pudo ejecutar la task");
+    }
+  };
+
+  return (
+    <Section
+      title="Tasks"
+      subtitle={
+        isController
+          ? "Deliberaciones (consenso entre orquestadores que reparten tareas) y tasks propias del orquestador."
+          : "Unidades de trabajo asignadas a esta zona. Pulsa play para ejecutar — los agentes con provider procesan la task vía LLM."
+      }
+      count={tasks.length}
+      onAdd={() => {}}
+      addLabel=""
+    >
+      <div className="flex gap-2 mb-2">
+        <input
+          type="text"
+          className="input !h-9 flex-1"
+          placeholder={
+            isController && newType === "deliberation"
+              ? "¿Qué hay que decidir? (los orquestadores deliberarán)"
+              : "Título de la task…"
+          }
+          value={newTitle}
+          onChange={(e) => setNewTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              handleCreate();
+            }
+          }}
+        />
+        <select
+          className="input !h-9 !w-32"
+          value={newType}
+          onChange={(e) => setNewType(e.target.value)}
+          title="Tipo"
+        >
+          {isController && <option value="deliberation">Deliberación</option>}
+          <option value="custom">Custom</option>
+          <option value="objective">Objective</option>
+          <option value="incident">Incident</option>
+        </select>
+        <button
+          type="button"
+          onClick={handleCreate}
+          className="btn btn-primary btn-sm"
+          disabled={creating || !newTitle.trim()}
+        >
+          {creating ? "Creando…" : "Crear"}
+        </button>
+      </div>
+
+      {error && (
+        <p className="text-xs text-[color:var(--color-status-error)]">
+          {error}
+        </p>
+      )}
+
+      {tasks.length === 0 ? (
+        <p className="text-xs text-[color:var(--color-text-dim)] italic">
+          Sin tasks.
+        </p>
+      ) : (
+        <ul className="space-y-1.5">
+          {tasks.slice(0, 20).map((t) => (
+            <li
+              key={t.id}
+              className="flex items-center gap-2 pl-3 pr-1 h-11 rounded-[var(--radius)] border border-[color:var(--color-border)] bg-[color:var(--color-surface-2)]"
+            >
+              <span
+                className="status-dot"
+                data-status={TASK_STATUS_DOT[t.status] || "idle"}
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{t.title}</p>
+                <p className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)]">
+                  {t.status}
+                  {t.finishedAt ? ` · ${timeAgo(t.finishedAt)}` : ""}
+                  {!t.finishedAt && t.startedAt
+                    ? ` · iniciada ${timeAgo(t.startedAt)}`
+                    : ""}
+                  {!t.startedAt ? ` · ${timeAgo(t.createdAt)}` : ""}
+                </p>
+              </div>
+              <div className="flex items-center gap-0.5 flex-shrink-0">
+                {(t.status === "pending" || t.status === "error") && (
+                  <button
+                    type="button"
+                    onClick={() => handleRun(t.id)}
+                    className="btn btn-ghost btn-sm btn-icon !h-8 !w-8 text-[color:var(--color-text-dim)] hover:text-[color:var(--color-accent)]"
+                    aria-label="Ejecutar"
+                    title="Ejecutar"
+                  >
+                    <PlayIcon />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => deleteTask(t.id)}
+                  className="btn btn-ghost btn-sm btn-icon !h-8 !w-8 text-[color:var(--color-text-dim)] hover:text-[color:var(--color-status-error)]"
+                  aria-label="Eliminar"
+                  title="Eliminar"
+                >
+                  <TrashIcon />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function ContextEntriesPanel({ zone }) {
+  const { entries, createEntry, updateEntry, deleteEntry } = useContextEntries({
+    scope: "zone",
+    scopeId: zone.id,
+  });
+  const [newContent, setNewContent] = useState("");
+  const [newKind, setNewKind] = useState("memo");
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleAdd = async () => {
+    const content = newContent.trim();
+    if (!content) return;
+    setAdding(true);
+    setError("");
+    try {
+      await createEntry({
+        scope: "zone",
+        scopeId: zone.id,
+        kind: newKind,
+        content,
+      });
+      setNewContent("");
+    } catch (err) {
+      setError(err.message || "No se pudo añadir");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  return (
+    <Section
+      title="Log de contexto"
+      subtitle="Retroalimentación auditable de los agentes (y entradas manuales). Pin = mantener, eliminar = cancelar la retroalimentación."
+      count={entries.length}
+      onAdd={() => {}}
+      addLabel=""
+    >
+      <div className="flex gap-2 mb-2">
+        <select
+          className="input !h-9 !w-36"
+          value={newKind}
+          onChange={(e) => setNewKind(e.target.value)}
+        >
+          <option value="memo">Memo</option>
+          <option value="observation">Observación</option>
+          <option value="insight">Insight</option>
+          <option value="decision">Decisión</option>
+        </select>
+        <input
+          type="text"
+          className="input !h-9 flex-1"
+          placeholder="Añadir entrada manual…"
+          value={newContent}
+          onChange={(e) => setNewContent(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              handleAdd();
+            }
+          }}
+        />
+        <button
+          type="button"
+          onClick={handleAdd}
+          className="btn btn-primary btn-sm"
+          disabled={adding || !newContent.trim()}
+        >
+          {adding ? "…" : "Añadir"}
+        </button>
+      </div>
+
+      {error && (
+        <p className="text-xs text-[color:var(--color-status-error)]">
+          {error}
+        </p>
+      )}
+
+      {entries.length === 0 ? (
+        <p className="text-xs text-[color:var(--color-text-dim)] italic">
+          Sin entradas en el log.
+        </p>
+      ) : (
+        <ul className="space-y-1.5 max-h-80 overflow-auto">
+          {entries.slice(0, 50).map((e) => (
+            <li
+              key={e.id}
+              className={[
+                "flex items-start gap-2 px-3 py-2 rounded-[var(--radius)] border bg-[color:var(--color-surface-2)]",
+                e.pinned
+                  ? "border-[color:var(--color-accent)]"
+                  : "border-[color:var(--color-border)]",
+              ].join(" ")}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="badge">{ENTRY_KIND_LABEL[e.kind] || e.kind}</span>
+                  <span className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)]">
+                    {e.sourceType === "user"
+                      ? "manual"
+                      : e.sourceType === "agent"
+                        ? "agente"
+                        : "sistema"}
+                    {" · "}
+                    {timeAgo(e.createdAt)}
+                  </span>
+                </div>
+                <p className="text-sm text-[color:var(--color-text)] mt-1 whitespace-pre-wrap break-words">
+                  {e.content}
+                </p>
+              </div>
+              <div className="flex items-center gap-0.5 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => updateEntry(e.id, { pinned: !e.pinned })}
+                  className={[
+                    "btn btn-ghost btn-sm btn-icon !h-8 !w-8",
+                    e.pinned
+                      ? "text-[color:var(--color-accent)]"
+                      : "text-[color:var(--color-text-dim)] hover:text-[color:var(--color-text)]",
+                  ].join(" ")}
+                  aria-label={e.pinned ? "Despinar" : "Pin"}
+                  title={e.pinned ? "Despinar" : "Pin"}
+                >
+                  <PinIcon />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteEntry(e.id)}
+                  className="btn btn-ghost btn-sm btn-icon !h-8 !w-8 text-[color:var(--color-text-dim)] hover:text-[color:var(--color-status-error)]"
+                  aria-label="Eliminar"
+                  title="Eliminar (cancelar retroalimentación)"
+                >
+                  <TrashIcon />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
   );
 }
 
@@ -414,7 +744,7 @@ export default function ZoneDialog({
       onClick={onClose}
     >
       <div
-        className="bg-[color:var(--color-surface-1)] border border-[color:var(--color-border)] rounded-[var(--radius-lg)] w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
+        className="bg-[color:var(--color-surface-1)] border border-[color:var(--color-border)] rounded-[var(--radius-lg)] w-full max-w-[1500px] h-[92vh] flex flex-col overflow-hidden"
         style={{ boxShadow: "var(--shadow-float)" }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
@@ -473,130 +803,162 @@ export default function ZoneDialog({
           </div>
         </header>
 
-        <form onSubmit={handleSubmit} className="flex-1 flex flex-col min-h-0">
-          <div className="flex-1 overflow-auto p-5 space-y-6">
+        {/* Body wrapper: 2 columnas (config | runtime). La izquierda es el
+            <form>; la derecha es siblings — así evitamos forms anidados y
+            cada panel scrollea independiente. En create la derecha muestra
+            un placeholder (Tasks/Log requieren zona creada). */}
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 min-h-0 lg:grid lg:grid-cols-2">
+            <form
+              id="zone-form"
+              onSubmit={handleSubmit}
+              className="overflow-auto p-5 space-y-6 min-h-0 lg:border-r lg:border-[color:var(--color-border)]"
+            >
             {/* Básicos */}
             <div className="space-y-4">
-              <div>
-                <label htmlFor="zone-name" className="label">
-                  Nombre
-                </label>
-                <input
-                  id="zone-name"
-                  ref={nameRef}
-                  className="input"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
-                  placeholder="research-lab"
-                />
-              </div>
+              {isController ? (
+                // El orquestador es una zona única e identitaria — su nombre
+                // y tipo los fija el sistema y no se renombran/recambian.
+                <div>
+                  <label className="label">Identidad</label>
+                  <div className="flex items-center gap-3 px-3 h-11 rounded-[var(--radius)] border border-[color:var(--color-border)] bg-[color:var(--color-surface-2)]">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: color }}
+                    />
+                    <span className="text-sm font-medium truncate">{name}</span>
+                    <span className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)] ml-auto flex-shrink-0">
+                      {selection === "custom" ? customType || "custom" : selection} · orquestador
+                    </span>
+                  </div>
+                  <p className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)] mt-1">
+                    el orquestador no puede renombrarse ni cambiar de tipo
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label htmlFor="zone-name" className="label">
+                      Nombre
+                    </label>
+                    <input
+                      id="zone-name"
+                      ref={nameRef}
+                      className="input"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      required
+                      placeholder="research-lab"
+                    />
+                  </div>
 
-              <div>
-                <label className="label">Tipo</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {ZONE_TYPES.map((zt) => {
-                    const active = zt.id === selection;
-                    return (
+                  <div>
+                    <label className="label">Tipo</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {ZONE_TYPES.map((zt) => {
+                        const active = zt.id === selection;
+                        return (
+                          <button
+                            type="button"
+                            key={zt.id}
+                            onClick={() => selectPreset(zt)}
+                            className={[
+                              "flex items-center gap-2 h-9 px-3 rounded-[var(--radius)] border text-xs font-medium uppercase tracking-wider transition-colors",
+                              active
+                                ? "bg-[color:var(--color-surface-3)]"
+                                : "text-[color:var(--color-text-muted)] border-[color:var(--color-border)] hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-text)]",
+                            ].join(" ")}
+                            style={
+                              active
+                                ? { borderColor: zt.color, color: zt.color }
+                                : undefined
+                            }
+                          >
+                            <span
+                              className="w-2 h-2 rounded-full flex-shrink-0"
+                              style={{ backgroundColor: zt.color }}
+                            />
+                            <span className="truncate">{zt.label}</span>
+                          </button>
+                        );
+                      })}
                       <button
                         type="button"
-                        key={zt.id}
-                        onClick={() => selectPreset(zt)}
+                        onClick={selectCustom}
                         className={[
-                          "flex items-center gap-2 h-9 px-3 rounded-[var(--radius)] border text-xs font-medium uppercase tracking-wider transition-colors",
-                          active
+                          "col-span-3 flex items-center gap-2 h-9 px-3 rounded-[var(--radius)] border text-xs font-medium uppercase tracking-wider transition-colors",
+                          isCustom
                             ? "bg-[color:var(--color-surface-3)]"
-                            : "text-[color:var(--color-text-muted)] border-[color:var(--color-border)] hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-text)]",
+                            : "text-[color:var(--color-text-muted)] border-[color:var(--color-border)] border-dashed hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-text)]",
                         ].join(" ")}
-                        style={
-                          active
-                            ? { borderColor: zt.color, color: zt.color }
-                            : undefined
-                        }
+                        style={isCustom ? { borderColor: color, color } : undefined}
                       >
                         <span
                           className="w-2 h-2 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: zt.color }}
+                          style={{
+                            backgroundColor: isCustom ? color : "transparent",
+                            border: isCustom ? "none" : "1px dashed currentColor",
+                          }}
                         />
-                        <span className="truncate">{zt.label}</span>
+                        <span className="truncate">+ Personalizado</span>
                       </button>
-                    );
-                  })}
-                  <button
-                    type="button"
-                    onClick={selectCustom}
-                    className={[
-                      "col-span-3 flex items-center gap-2 h-9 px-3 rounded-[var(--radius)] border text-xs font-medium uppercase tracking-wider transition-colors",
-                      isCustom
-                        ? "bg-[color:var(--color-surface-3)]"
-                        : "text-[color:var(--color-text-muted)] border-[color:var(--color-border)] border-dashed hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-text)]",
-                    ].join(" ")}
-                    style={isCustom ? { borderColor: color, color } : undefined}
-                  >
-                    <span
-                      className="w-2 h-2 rounded-full flex-shrink-0"
-                      style={{
-                        backgroundColor: isCustom ? color : "transparent",
-                        border: isCustom ? "none" : "1px dashed currentColor",
-                      }}
-                    />
-                    <span className="truncate">+ Personalizado</span>
-                  </button>
-                </div>
+                    </div>
 
-                {isCustom && (
-                  <div className="mt-3 p-3 rounded-[var(--radius)] border border-[color:var(--color-border)] bg-[color:var(--color-surface-2)] space-y-3">
-                    <div>
-                      <label htmlFor="zone-custom-type" className="label">
-                        Nombre del tipo
-                      </label>
-                      <input
-                        id="zone-custom-type"
-                        className="input !h-9 !font-mono !text-[13px]"
-                        value={customType}
-                        onChange={(e) => setCustomType(e.target.value)}
-                        placeholder="marketing"
-                        maxLength={32}
-                      />
-                      <p className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)] mt-1">
-                        slug: {slugifyType(customType) || "custom"}
-                      </p>
-                    </div>
-                    <div>
-                      <label className="label">Color</label>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {COLOR_PALETTE.map((c) => {
-                          const sel = c.toLowerCase() === color.toLowerCase();
-                          return (
-                            <button
-                              type="button"
-                              key={c}
-                              onClick={() => setColor(c)}
-                              aria-label={`Color ${c}`}
-                              className="w-7 h-7 rounded-full transition-transform"
-                              style={{
-                                backgroundColor: c,
-                                outline: sel
-                                  ? `2px solid var(--color-text)`
-                                  : "1px solid var(--color-border)",
-                                outlineOffset: sel ? 2 : 0,
-                              }}
+                    {isCustom && (
+                      <div className="mt-3 p-3 rounded-[var(--radius)] border border-[color:var(--color-border)] bg-[color:var(--color-surface-2)] space-y-3">
+                        <div>
+                          <label htmlFor="zone-custom-type" className="label">
+                            Nombre del tipo
+                          </label>
+                          <input
+                            id="zone-custom-type"
+                            className="input !h-9 !font-mono !text-[13px]"
+                            value={customType}
+                            onChange={(e) => setCustomType(e.target.value)}
+                            placeholder="marketing"
+                            maxLength={32}
+                          />
+                          <p className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)] mt-1">
+                            slug: {slugifyType(customType) || "custom"}
+                          </p>
+                        </div>
+                        <div>
+                          <label className="label">Color</label>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {COLOR_PALETTE.map((c) => {
+                              const sel = c.toLowerCase() === color.toLowerCase();
+                              return (
+                                <button
+                                  type="button"
+                                  key={c}
+                                  onClick={() => setColor(c)}
+                                  aria-label={`Color ${c}`}
+                                  className="w-7 h-7 rounded-full transition-transform"
+                                  style={{
+                                    backgroundColor: c,
+                                    outline: sel
+                                      ? `2px solid var(--color-text)`
+                                      : "1px solid var(--color-border)",
+                                    outlineOffset: sel ? 2 : 0,
+                                  }}
+                                />
+                              );
+                            })}
+                            <input
+                              type="text"
+                              value={color}
+                              onChange={(e) => setColor(e.target.value)}
+                              className="input !h-9 !w-28 !font-mono !text-[12px] uppercase"
+                              maxLength={7}
+                              placeholder="#ec4899"
                             />
-                          );
-                        })}
-                        <input
-                          type="text"
-                          value={color}
-                          onChange={(e) => setColor(e.target.value)}
-                          className="input !h-9 !w-28 !font-mono !text-[12px] uppercase"
-                          maxLength={7}
-                          placeholder="#ec4899"
-                        />
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
-                )}
-              </div>
+                </>
+              )}
 
               <div>
                 <label htmlFor="zone-description" className="label">
@@ -875,6 +1237,31 @@ export default function ZoneDialog({
                 </div>
               )}
             </Section>
+            </form>
+
+            {/* RIGHT COLUMN: runtime / ops. En edit muestra tasks + log
+                reales. En create solo un placeholder porque los paneles
+                requieren un zone.id existente. */}
+            {isEdit ? (
+              <div className="overflow-auto p-5 space-y-6 min-h-0 border-t border-[color:var(--color-border)] lg:border-t-0">
+                <TasksPanel zone={zone} />
+
+                <hr className="border-[color:var(--color-border)]" />
+
+                <ContextEntriesPanel zone={zone} />
+              </div>
+            ) : (
+              <div className="overflow-auto p-5 min-h-0 border-t border-[color:var(--color-border)] lg:border-t-0 flex items-center justify-center">
+                <div className="text-center space-y-2 max-w-sm">
+                  <p className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)]">
+                    runtime · pendiente
+                  </p>
+                  <p className="text-sm text-[color:var(--color-text-muted)]">
+                    Tasks y log de contexto aparecerán aquí en cuanto crees la zona.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           {error && (
@@ -896,8 +1283,12 @@ export default function ZoneDialog({
               >
                 Cancelar
               </button>
+              {/* form="zone-form" enlaza el submit con el form de la
+                  izquierda, que vive fuera de este footer (necesario porque
+                  en edit el form y el footer son hermanos). */}
               <button
                 type="submit"
+                form="zone-form"
                 className="btn btn-primary btn-sm"
                 disabled={submitting || deleting}
               >
@@ -911,7 +1302,7 @@ export default function ZoneDialog({
               </button>
             </div>
           </footer>
-        </form>
+        </div>
       </div>
     </div>,
     document.body

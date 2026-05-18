@@ -94,9 +94,6 @@ async function main() {
 
     console.log('\n✅ Usuario creado:');
     console.log(JSON.stringify(signupResult, null, 2));
-    console.log(
-      '\nℹ️  Se añadirá automáticamente a la organización "No More Work" en su primer login.'
-    );
     process.exit(0);
   } catch (err) {
     console.error('\n❌ Error creando usuario:', err.message || err);
