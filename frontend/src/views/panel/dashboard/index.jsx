@@ -1073,21 +1073,6 @@ function StatPill({ value, label, status = "working" }) {
   );
 }
 
-function Sep() {
-  return <span className="w-px h-4 bg-[color:var(--color-border)]" aria-hidden="true" />;
-}
-
-function LegendItem({ status, label }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="status-dot" data-status={status} />
-      <span className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-muted)]">
-        {label}
-      </span>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // View
 // ---------------------------------------------------------------------------
@@ -1240,18 +1225,8 @@ export default function PanelDashboardView() {
       </Application>
 
       {/* HUD — stats top-left */}
-      <div className="absolute top-4 left-4 panel-floating !p-3 flex items-center gap-3">
+      <div className="absolute top-4 left-4 panel-floating !p-3">
         <StatPill value={agentsCount} label="agentes" status="working" />
-        <Sep />
-        <StatPill
-          value={zones.length}
-          label="zonas"
-          status={zones.length > 0 ? "success" : "idle"}
-        />
-        <Sep />
-        <StatPill value="247" label="tareas" status="info" />
-        <Sep />
-        <StatPill value="2" label="incidencias" status="warning" />
       </div>
 
       {/* HUD — acciones top-right */}
@@ -1266,15 +1241,6 @@ export default function PanelDashboardView() {
         >
           + Agente
         </button>
-      </div>
-
-      {/* HUD — leyenda bottom-left */}
-      <div className="absolute bottom-4 left-4 panel-floating !px-3 !py-2 flex items-center gap-4">
-        <LegendItem status="working" label="trabajando" />
-        <LegendItem status="success" label="ok" />
-        <LegendItem status="warning" label="atención" />
-        <LegendItem status="error" label="error" />
-        <LegendItem status="idle" label="inactivo" />
       </div>
 
       {/* HUD — zoom bottom-right */}
