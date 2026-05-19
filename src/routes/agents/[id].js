@@ -1,10 +1,6 @@
 const { Route } = require('zyket');
 const AuthMiddleware = require('../../middlewares/auth');
 const { emitToOrg } = require('../../utils/realtime');
-const {
-  upsertAgentSchedule,
-  removeAgentSchedule,
-} = require('../../engine/scheduler');
 
 module.exports = class AgentRoute extends Route {
   middlewares = {
@@ -73,8 +69,14 @@ module.exports = class AgentRoute extends Route {
           : null;
     }
 
-    // Mover a otra zona: validar pertenencia a la org.
-    if (typeof body.zoneId === 'string' && body.zoneId !== agent.zoneId) {
+    // Mover a otra zona: validar pertenencia a la org. Los agentes
+    // system (p. ej. el coordinador del orquestador) están atados a su
+    // zona — ignoramos cualquier intento de moverlos.
+    if (
+      typeof body.zoneId === 'string' &&
+      body.zoneId !== agent.zoneId &&
+      !agent.isSystem
+    ) {
       const zone = await Zone.findOne({
         where: { id: body.zoneId, organizationId: orgId },
       });
@@ -108,10 +110,12 @@ module.exports = class AgentRoute extends Route {
       'agent:updated',
       payload
     );
-    // Re-sincroniza el scheduler en caso de cambio en loopEnabled o
-    // loopIntervalSec. upsertAgentSchedule maneja ambos casos
-    // internamente (también borra si loopEnabled pasó a false).
-    await upsertAgentSchedule(container, agent, { immediate: loopJustEnabled });
+    // Re-sincroniza el scheduler tras un cambio de loopEnabled o
+    // loopIntervalSec. scheduler.upsert maneja ambos casos internamente
+    // (también borra si loopEnabled pasó a false).
+    await container
+      .get('nmw-engine')
+      .scheduler.upsert(agent, { immediate: loopJustEnabled });
     return { agent: payload };
   }
 
@@ -125,13 +129,22 @@ module.exports = class AgentRoute extends Route {
     if (!agent) {
       return { status: 404, success: false, message: 'Agent not found' };
     }
+    // Agentes del sistema (coordinador del orquestador) no se pueden
+    // borrar. Sí se pueden configurar via PUT.
+    if (agent.isSystem) {
+      return {
+        status: 400,
+        success: false,
+        message: 'Este agente es del sistema y no puede eliminarse.',
+      };
+    }
 
     await agent.destroy();
     emitToOrg(container, request.activeOrganizationId, 'agent:deleted', {
       id,
       zoneId: agent.zoneId,
     });
-    await removeAgentSchedule(container, id);
+    await container.get('nmw-engine').scheduler.remove(id);
     return { id };
   }
 };

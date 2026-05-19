@@ -122,6 +122,9 @@ module.exports = class ZonesRoute extends Route {
       },
     });
 
+    // Y su agente coordinador por defecto dentro de esa zona.
+    await container.get('nmw-engine').ensureControllerAgent(orgId);
+
     const zones = await Zone.findAll({
       where: { organizationId: orgId },
       include: [

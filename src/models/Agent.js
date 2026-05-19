@@ -58,6 +58,15 @@ module.exports = ({ sequelize, Sequelize }) => {
       // agente AHORA. Ej.: "Tick", "Resolviendo: Investigar competencia",
       // "Deliberando: ¿lanzamos v2?". Null = inactivo.
       currentActivity: { type: Sequelize.STRING, allowNull: true },
+
+      // Agente creado y mantenido por el sistema (p. ej. el agente por
+      // defecto del orquestador). Se puede configurar pero NO eliminar
+      // ni mover de zona. Default false para agentes creados por usuarios.
+      isSystem: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
     },
     {
       tableName: 'agents',

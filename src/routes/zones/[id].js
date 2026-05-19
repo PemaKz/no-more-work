@@ -2,7 +2,6 @@ const { Route } = require('zyket');
 const AuthMiddleware = require('../../middlewares/auth');
 const { encrypt } = require('../../utils/crypto');
 const { emitToOrg } = require('../../utils/realtime');
-const { removeAgentSchedule } = require('../../engine/scheduler');
 
 function serializeZone(zone) {
   const json = zone.toJSON();
@@ -245,8 +244,9 @@ module.exports = class ZoneRoute extends Route {
     await zone.destroy();
     emitToOrg(container, request.activeOrganizationId, 'zone:deleted', { id });
 
+    const scheduler = container.get('nmw-engine').scheduler;
     for (const a of agents) {
-      await removeAgentSchedule(container, a.id);
+      await scheduler.remove(a.id);
     }
 
     return { id };

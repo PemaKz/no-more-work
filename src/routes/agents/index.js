@@ -2,7 +2,6 @@ const { Route } = require('zyket');
 const AuthMiddleware = require('../../middlewares/auth');
 const { notify } = require('../../utils/notifications');
 const { emitToOrg } = require('../../utils/realtime');
-const { upsertAgentSchedule } = require('../../engine/scheduler');
 
 /**
  * Coloca el nuevo agente en un grid simple dentro de la zona, evitando
@@ -135,7 +134,7 @@ module.exports = class AgentsRoute extends Route {
     // creación, así que pasamos immediate=true para que el primer tick
     // dispare ya y el usuario vea actividad sin esperar loopIntervalSec.
     if (agent.loopEnabled) {
-      await upsertAgentSchedule(container, agent, { immediate: true });
+      await container.get('nmw-engine').scheduler.upsert(agent, { immediate: true });
     }
 
     return { status: 201, agent: payload };

@@ -1,6 +1,5 @@
 const { Route } = require('zyket');
 const AuthMiddleware = require('../../../middlewares/auth');
-const { runTask } = require('../../../engine/runTask');
 
 const QUEUE_NAME = 'task-process';
 
@@ -53,11 +52,14 @@ module.exports = class TaskRunRoute extends Route {
     }
 
     if (!queued) {
-      runTask(task.id, container).catch((err) => {
-        container
-          .get('logger')
-          ?.error?.(`[engine] runTask ${task.id} threw: ${err.message}`);
-      });
+      container
+        .get('nmw-engine')
+        .run('task', { taskId: task.id })
+        .catch((err) => {
+          container
+            .get('logger')
+            ?.error?.(`[nmw-engine] task ${task.id} threw: ${err.message}`);
+        });
     }
 
     return {

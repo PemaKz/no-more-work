@@ -373,7 +373,15 @@ export default function AgentDialog({
             </h2>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            {isEdit && (
+            {isEdit && agent.isSystem && (
+              <span
+                className="mono text-[10px] uppercase tracking-wider px-2 py-1 rounded-[var(--radius-sm)] bg-[color:var(--color-surface-3)] text-[color:var(--color-text-muted)]"
+                title="Agente del sistema — configurable pero no eliminable"
+              >
+                sistema
+              </span>
+            )}
+            {isEdit && !agent.isSystem && (
               <button
                 type="button"
                 onClick={handleDeleteClick}

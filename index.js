@@ -1,8 +1,26 @@
-const { Kernel, BullBoardExtension } = require('zyket');
+const { Kernel, BullBoardExtension, Service } = require('zyket');
+
+// Service que aplica las migraciones Sequelize (umzug) al boot. Vive aquí
+// y no en el engine porque las migraciones cubren modelos del proyecto
+// entero, no solo del engine. Se registra como PRIMER servicio del
+// usuario para que las tablas existan antes de que cualquier otro
+// servicio (auth, nmw-engine, ...) las consulte.
+class MigrationsService extends Service {
+	#container;
+	constructor(container) {
+		super('migrations');
+		this.#container = container;
+	}
+	async boot() {
+		await this.#container.get('database').runMigrations();
+	}
+}
 
 const kernel = new Kernel({
 	services: [
-		['auth', require('./src/services/auth'), ["@service_container"]],
+		['migrations', MigrationsService, ['@service_container']],
+		['auth', require('./src/services/auth'), ['@service_container']],
+		['nmw-engine', require('./src/services/nmw-engine'), ['@service_container']],
 	],
     extensions: [
         new BullBoardExtension({
@@ -10,22 +28,6 @@ const kernel = new Kernel({
     ],
 });
 
-kernel.boot().then(async () => {
-    console.log('Kernel booted successfully!');
-    const db = kernel.container.get('database');
-    await db.sequelize.sync();
-
-    try {
-        const { initScheduler } = require('./src/engine/scheduler');
-        await initScheduler(kernel.container);
-    } catch (error) {
-        kernel.container.get('logger')?.error?.(
-            'Error initializing agent scheduler:',
-            error.message
-        );
-    }
-
-    
-}).catch((error) => {
+kernel.boot().catch((error) => {
     console.error('Error booting kernel:', error);
 });

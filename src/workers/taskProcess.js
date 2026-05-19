@@ -1,10 +1,9 @@
 const { Worker } = require('zyket');
-const { runTask } = require('../engine/runTask');
 
 /**
- * Worker para la queue `task-process`. Procesa tasks encoladas vía
- * `POST /tasks/:id/run`. Aísla la ejecución LLM del request HTTP — el
- * cliente recibe respuesta inmediata y el progreso llega por socket.
+ * Adapter del worker para la queue `task-process`. La lógica vive en
+ * `src/services/nmw-engine/modes/task.js`. Este archivo existe porque
+ * zyket auto-carga workers SOLO desde `src/workers/`.
  */
 module.exports = class TaskProcessWorker extends Worker {
   queueName = 'task-process';
@@ -12,8 +11,7 @@ module.exports = class TaskProcessWorker extends Worker {
   async handle({ container, job }) {
     const { taskId } = job.data || {};
     if (!taskId) return { skipped: 'no-task-id' };
-
-    await runTask(taskId, container);
+    await container.get('nmw-engine').run('task', { taskId });
     return { ok: true };
   }
 };
