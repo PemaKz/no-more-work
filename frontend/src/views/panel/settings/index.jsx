@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import useConfig from "../../../hooks/useConfig";
 import useAuth from "../../../hooks/useAuth";
+import useOrganization from "../../../hooks/useOrganization";
 import useProviders from "../../../hooks/useProviders";
 import timeAgo from "../../../utils/timeAgo";
 import ProviderDialog from "./ProviderDialog";
@@ -615,13 +616,136 @@ function OrgRow({ label, value, mono = false }) {
   );
 }
 
-function OrganizationTab() {
-  const { activeOrganization, organizations } = useAuth();
+function slugify(value) {
+  return value
+    .toLowerCase()
+    .trim()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function CopyButton({ value, label = "Copiar" }) {
+  const [copied, setCopied] = useState(false);
+  const handle = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={handle}
+      className="btn btn-secondary btn-sm"
+      title={value}
+    >
+      {copied ? "Copiado" : label}
+    </button>
+  );
+}
+
+function OrgDetailsSection({ activeOrganization, isAdmin, updateOrganization, refetch }) {
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  useEffect(() => {
+    setName(activeOrganization?.name || "");
+    setSlug(activeOrganization?.slug || "");
+  }, [activeOrganization?.id, activeOrganization?.name, activeOrganization?.slug]);
+
+  const dirty =
+    name !== (activeOrganization?.name || "") ||
+    slug !== (activeOrganization?.slug || "");
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (!name.trim()) return setError("Nombre requerido");
+    if (!slug.trim()) return setError("Slug requerido");
+    setSubmitting(true);
+    try {
+      await updateOrganization({ name: name.trim(), slug: slug.trim() });
+      await refetch?.();
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 1500);
+    } catch (err) {
+      setError(err.message || "No se pudo guardar");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
-    <div className="space-y-4">
-      <section className="panel !p-5">
-        <h3 className="text-sm font-semibold mb-3">Organización activa</h3>
+    <section className="panel !p-5">
+      <header className="mb-4">
+        <h3 className="text-sm font-semibold">Detalles de la organización</h3>
+        <p className="text-xs text-[color:var(--color-text-muted)] mt-0.5">
+          Información visible al resto de miembros. El slug se usa en URLs.
+        </p>
+      </header>
+
+      {isAdmin ? (
+        <form onSubmit={handleSave} className="space-y-4">
+          <div>
+            <label htmlFor="org-edit-name" className="label">Nombre</label>
+            <input
+              id="org-edit-name"
+              className="input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="org-edit-slug" className="label">Slug</label>
+            <input
+              id="org-edit-slug"
+              className="input !font-mono !text-[13px]"
+              value={slug}
+              onChange={(e) => setSlug(slugify(e.target.value))}
+              required
+            />
+          </div>
+          <dl className="!my-3">
+            <OrgRow label="ID" value={activeOrganization?.id} mono />
+            <OrgRow
+              label="Creada"
+              value={
+                activeOrganization?.createdAt
+                  ? new Date(activeOrganization.createdAt).toLocaleString()
+                  : null
+              }
+            />
+          </dl>
+          {error && (
+            <p className="text-xs text-[color:var(--color-status-error)]">{error}</p>
+          )}
+          <div className="flex items-center justify-end gap-3">
+            {savedFlash && (
+              <span className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-status-success)]">
+                guardado
+              </span>
+            )}
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              disabled={!dirty || submitting}
+            >
+              {submitting ? "Guardando…" : "Guardar"}
+            </button>
+          </div>
+        </form>
+      ) : (
         <dl>
           <OrgRow label="Nombre" value={activeOrganization?.name} />
           <OrgRow label="Slug" value={activeOrganization?.slug} mono />
@@ -635,34 +759,450 @@ function OrganizationTab() {
             }
           />
         </dl>
-      </section>
+      )}
+    </section>
+  );
+}
 
-      <section className="panel !p-5">
-        <h3 className="text-sm font-semibold mb-3">Todas tus organizaciones</h3>
-        {organizations.length === 0 ? (
-          <p className="text-xs text-[color:var(--color-text-dim)] italic">
-            No perteneces a ninguna organización.
+const ROLE_OPTIONS = [
+  { value: "member", label: "Miembro" },
+  { value: "admin", label: "Admin" },
+  { value: "owner", label: "Owner" },
+];
+
+function InviteForm({ isAdmin, invite, buildInvitationUrl }) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("member");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [lastLink, setLastLink] = useState(null);
+
+  if (!isAdmin) return null;
+
+  const handle = async (e) => {
+    e.preventDefault();
+    setError("");
+    setLastLink(null);
+    if (!email.trim()) return setError("Email requerido");
+    setSubmitting(true);
+    try {
+      const inv = await invite({ email: email.trim().toLowerCase(), role });
+      setLastLink({
+        url: buildInvitationUrl(inv.id),
+        email: inv.email,
+      });
+      setEmail("");
+      setRole("member");
+    } catch (err) {
+      setError(err.message || "No se pudo enviar la invitación");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="panel !p-5">
+      <header className="mb-3">
+        <h3 className="text-sm font-semibold">Invitar miembro</h3>
+        <p className="text-xs text-[color:var(--color-text-muted)] mt-0.5">
+          Crea una invitación. Como no hay email transaccional configurado, te
+          mostraremos el link aquí para que se lo envíes al invitado tú.
+        </p>
+      </header>
+
+      <form onSubmit={handle} className="grid grid-cols-[1fr_auto_auto] gap-2">
+        <input
+          type="email"
+          className="input !h-9"
+          placeholder="email@dominio.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+        />
+        <select
+          className="input !h-9 !w-28"
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+        >
+          {ROLE_OPTIONS.map((r) => (
+            <option key={r.value} value={r.value}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={submitting}>
+          {submitting ? "Enviando…" : "Invitar"}
+        </button>
+      </form>
+
+      {error && (
+        <p className="text-xs text-[color:var(--color-status-error)] mt-2">
+          {error}
+        </p>
+      )}
+
+      {lastLink && (
+        <div className="mt-3 px-3 py-2 rounded-[var(--radius)] border border-[color:var(--color-border)] bg-[color:var(--color-surface-3)]">
+          <p className="text-xs text-[color:var(--color-text-muted)]">
+            Invitación creada para <strong>{lastLink.email}</strong>. Envía este
+            link:
           </p>
-        ) : (
-          <ul className="divide-y divide-[color:var(--color-border)]">
-            {organizations.map((o) => (
-              <li key={o.id} className="flex items-center justify-between py-2">
-                <div>
-                  <p className="text-sm font-medium">{o.name}</p>
-                  <p className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)]">
-                    {o.slug}
+          <div className="flex items-center gap-2 mt-2">
+            <code className="mono text-[11px] flex-1 truncate px-2 py-1.5 rounded-[var(--radius-sm)] bg-[color:var(--color-surface-2)] border border-[color:var(--color-border)]">
+              {lastLink.url}
+            </code>
+            <CopyButton value={lastLink.url} />
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MembersSection({
+  members,
+  invitations,
+  isAdmin,
+  isOwner,
+  currentUserId,
+  removeMember,
+  updateMemberRole,
+  cancelInvitation,
+  buildInvitationUrl,
+  isLoading,
+}) {
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState("");
+
+  const handleRemove = async (memberId, displayName) => {
+    setError("");
+    if (!window.confirm(`Eliminar a ${displayName} de la organización?`)) return;
+    setBusy(memberId);
+    try {
+      await removeMember(memberId);
+    } catch (err) {
+      setError(err.message || "No se pudo eliminar el miembro");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleRoleChange = async (memberId, newRole) => {
+    setError("");
+    setBusy(memberId);
+    try {
+      await updateMemberRole(memberId, newRole);
+    } catch (err) {
+      setError(err.message || "No se pudo cambiar el rol");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleCancelInvitation = async (invId) => {
+    setError("");
+    setBusy(invId);
+    try {
+      await cancelInvitation(invId);
+    } catch (err) {
+      setError(err.message || "No se pudo cancelar la invitación");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="panel !p-5">
+      <header className="mb-4 flex items-end justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold">
+            Miembros{" "}
+            <span className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)] font-normal">
+              {members.length}
+            </span>
+          </h3>
+          <p className="text-xs text-[color:var(--color-text-muted)] mt-0.5">
+            Personas con acceso a esta organización.
+          </p>
+        </div>
+      </header>
+
+      {error && (
+        <div className="mb-3 px-3 py-2 rounded-[var(--radius)] border bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.35)] text-xs text-[color:var(--color-status-error)]">
+          {error}
+        </div>
+      )}
+
+      {isLoading ? (
+        <p className="text-xs text-[color:var(--color-text-dim)] italic">
+          Cargando…
+        </p>
+      ) : members.length === 0 ? (
+        <p className="text-xs text-[color:var(--color-text-dim)] italic">
+          Sin miembros.
+        </p>
+      ) : (
+        <ul className="divide-y divide-[color:var(--color-border)]">
+          {members.map((m) => {
+            const isSelf = m.userId === currentUserId;
+            const memberRoles = (m.role || "")
+              .split(",")
+              .map((r) => r.trim())
+              .filter(Boolean);
+            const isOwnerRow = memberRoles.includes("owner");
+            // Reglas (espejo del backend en update-member-role):
+            //  - admin/owner pueden cambiar roles (member:["update"]).
+            //  - Solo owner puede modificar a otro owner.
+            //  - Solo owner puede asignar rol owner.
+            const canEditThisMember =
+              isAdmin && (!isOwnerRow || isOwner);
+            const canRemove = isAdmin && !isSelf && !isOwnerRow;
+            const primaryRole = memberRoles[0] || "member";
+            return (
+              <li key={m.id} className="flex items-center gap-3 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-medium truncate">
+                      {m.user?.name || m.user?.email || "—"}
+                    </p>
+                    {isSelf && (
+                      <span className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)]">
+                        tú
+                      </span>
+                    )}
+                  </div>
+                  <p className="mono text-[11px] text-[color:var(--color-text-muted)] truncate">
+                    {m.user?.email}
                   </p>
                 </div>
-                {o.id === activeOrganization?.id && (
-                  <span className="badge" data-status="working">
-                    activa
-                  </span>
+                {canEditThisMember ? (
+                  <select
+                    className="input !h-8 !w-28 !text-xs"
+                    value={primaryRole}
+                    disabled={busy === m.id}
+                    onChange={(e) => handleRoleChange(m.id, e.target.value)}
+                  >
+                    {ROLE_OPTIONS.filter(
+                      (opt) => opt.value !== "owner" || isOwner
+                    ).map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="badge">{m.role}</span>
+                )}
+                {canRemove && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleRemove(m.id, m.user?.name || m.user?.email || m.id)
+                    }
+                    disabled={busy === m.id}
+                    className="btn btn-ghost btn-sm text-[color:var(--color-text-dim)] hover:text-[color:var(--color-status-error)]"
+                  >
+                    {busy === m.id ? "…" : "Eliminar"}
+                  </button>
                 )}
               </li>
-            ))}
+            );
+          })}
+        </ul>
+      )}
+
+      {invitations.length > 0 && (
+        <>
+          <div className="mt-5 mb-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-[color:var(--color-text-muted)]">
+              Invitaciones pendientes ({invitations.length})
+            </h4>
+          </div>
+          <ul className="divide-y divide-[color:var(--color-border)]">
+            {invitations.map((inv) => {
+              const expires =
+                inv.expiresAt && new Date(inv.expiresAt).toLocaleString();
+              return (
+                <li key={inv.id} className="flex items-center gap-3 py-2.5">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{inv.email}</p>
+                    <p className="mono text-[10px] uppercase tracking-wider text-[color:var(--color-text-dim)]">
+                      expira {expires}
+                    </p>
+                  </div>
+                  <span className="badge">{inv.role}</span>
+                  <CopyButton
+                    value={buildInvitationUrl(inv.id)}
+                    label="Copiar link"
+                  />
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => handleCancelInvitation(inv.id)}
+                      disabled={busy === inv.id}
+                      className="btn btn-ghost btn-sm text-[color:var(--color-text-dim)] hover:text-[color:var(--color-status-error)]"
+                    >
+                      {busy === inv.id ? "…" : "Cancelar"}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+function DangerZone({ activeOrganization, deleteOrganization }) {
+  const [confirmSlug, setConfirmSlug] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const targetSlug = activeOrganization?.slug || "";
+  const canDelete = confirmSlug.trim() === targetSlug && !submitting;
+
+  const handle = async () => {
+    setError("");
+    setSubmitting(true);
+    try {
+      await deleteOrganization(activeOrganization.id);
+      // Tras borrar, el plugin pone activeOrganizationId a null y la session
+      // se actualiza. OrgRequiredMiddleware mandará al onboarding o /panel.
+      window.location.href = "/panel/dashboard";
+    } catch (err) {
+      setError(err.message || "No se pudo borrar la organización");
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="panel !p-5 border-[rgba(239,68,68,0.35)]">
+      <header className="mb-3">
+        <h3 className="text-sm font-semibold text-[color:var(--color-status-error)]">
+          Zona peligrosa
+        </h3>
+        <p className="text-xs text-[color:var(--color-text-muted)] mt-0.5">
+          Borrar la organización elimina todos sus miembros, invitaciones y
+          recursos asociados. Esta acción es irreversible.
+        </p>
+      </header>
+
+      <div className="space-y-3">
+        <div>
+          <label htmlFor="confirm-slug" className="label">
+            Escribe{" "}
+            <code className="mono text-[11px]">{targetSlug}</code> para confirmar
+          </label>
+          <input
+            id="confirm-slug"
+            className="input !font-mono !text-[13px]"
+            value={confirmSlug}
+            onChange={(e) => setConfirmSlug(e.target.value)}
+            placeholder={targetSlug}
+            autoComplete="off"
+          />
+        </div>
+        {error && (
+          <p className="text-xs text-[color:var(--color-status-error)]">{error}</p>
         )}
-      </section>
+        <button
+          type="button"
+          onClick={handle}
+          disabled={!canDelete}
+          className="btn btn-secondary btn-sm w-full"
+          style={{
+            color: canDelete ? "var(--color-status-error)" : undefined,
+            borderColor: canDelete ? "rgba(239,68,68,0.5)" : undefined,
+          }}
+        >
+          {submitting ? "Borrando…" : "Borrar organización"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function OrganizationTab() {
+  const { activeOrganization, isAdmin, isOwner } = useAuth();
+  const { refetch, updateOrganization, deleteOrganization } = useOrganization();
+
+  if (!activeOrganization) {
+    return (
+      <p className="text-sm text-[color:var(--color-text-muted)]">
+        Selecciona una organización.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <OrgDetailsSection
+        activeOrganization={activeOrganization}
+        isAdmin={isAdmin}
+        updateOrganization={updateOrganization}
+        refetch={refetch}
+      />
+
+      {isOwner && (
+        <DangerZone
+          activeOrganization={activeOrganization}
+          deleteOrganization={deleteOrganization}
+        />
+      )}
+    </div>
+  );
+}
+
+function MembersTab() {
+  const { activeOrganization, user, isAdmin, isOwner } = useAuth();
+  const {
+    members,
+    invitations,
+    isLoading,
+    error,
+    invite,
+    cancelInvitation,
+    removeMember,
+    updateMemberRole,
+    buildInvitationUrl,
+  } = useOrganization();
+
+  if (!activeOrganization) {
+    return (
+      <p className="text-sm text-[color:var(--color-text-muted)]">
+        Selecciona una organización.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {error && (
+        <div className="px-4 py-3 rounded-[var(--radius)] border bg-[rgba(239,68,68,0.08)] border-[rgba(239,68,68,0.35)] text-sm text-[color:var(--color-status-error)]">
+          {error.message || "Error cargando miembros"}
+        </div>
+      )}
+
+      <InviteForm
+        isAdmin={isAdmin}
+        invite={invite}
+        buildInvitationUrl={buildInvitationUrl}
+      />
+
+      <MembersSection
+        members={members}
+        invitations={invitations}
+        isAdmin={isAdmin}
+        isOwner={isOwner}
+        currentUserId={user?.id}
+        removeMember={removeMember}
+        updateMemberRole={updateMemberRole}
+        cancelInvitation={cancelInvitation}
+        buildInvitationUrl={buildInvitationUrl}
+        isLoading={isLoading}
+      />
     </div>
   );
 }
@@ -675,6 +1215,7 @@ const TABS = [
   { id: "resources", label: "Recursos" },
   { id: "providers", label: "Providers" },
   { id: "organization", label: "Organización" },
+  { id: "members", label: "Miembros" },
 ];
 
 const KIND_LABEL = {
@@ -834,6 +1375,7 @@ export default function PanelSettingsView() {
         )}
         {tab === "providers" && <ProvidersTab />}
         {tab === "organization" && <OrganizationTab />}
+        {tab === "members" && <MembersTab />}
       </div>
     </div>
   );

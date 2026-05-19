@@ -7,6 +7,7 @@ import AuthLayout from './src/layouts/auth'
 import PanelLayout from './src/layouts/panel'
 import LoggedMiddleware from './src/middlewares/LoggedMiddleware'
 import PanelOnboardingView from './src/views/panel/onboarding'
+import InvitationView from './src/views/invitation'
 
 createRoot(document.getElementById('root')).render(<BrowserRouter>
   <Routes>
@@ -20,6 +21,7 @@ createRoot(document.getElementById('root')).render(<BrowserRouter>
         </LoggedMiddleware>
       }
     />
+    <Route path="/invitation/:id" element={<InvitationView />} />
     <Route path="/panel/*" element={<PanelLayout />} />
     <Route path="*" element={<Navigate to="/auth" replace />} />
   </Routes>
